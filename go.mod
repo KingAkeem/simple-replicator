@@ -1,4 +1,4 @@
-module data-observer
+module simple-replicator
 
 go 1.18
 
