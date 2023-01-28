@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
@@ -32,43 +32,6 @@ type Config struct {
 	Observations []Observation `yaml:"observations"`
 }
 
-// writes data to file for a single observation
-func writeObservation(src *sql.DB, dest *sql.DB, obv *Observation) error {
-	// get count
-	query := fmt.Sprintf("SELECT count(*) FROM %s", obv.Src)
-	row := src.QueryRow(query)
-	var count int
-	err := row.Scan(&count)
-	if err != nil {
-		return err
-	}
-
-	timestamp := time.Now().UTC().String()
-	statement := fmt.Sprintf("INSERT INTO %s (id, count, timestamp) VALUES ($2, $3, $4)", obv.Dest)
-	_, err = dest.Exec(statement, 1, count, timestamp)
-	return err
-}
-
-// starts a timer for each observation that runs at intervals specified
-func observe(obv *Observation, src, dest *sql.DB) {
-	freq := time.Second * time.Duration(obv.Frequency)
-	c := time.Tick(freq)
-	for now := range c {
-		log.Println("writing observation", now.UTC().String())
-		err := writeObservation(src, dest, obv)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-}
-
-// indefinitely writes data for observation based on frequency
-func startObserving(src *sql.DB, dest *sql.DB, observations []Observation) {
-	for _, obv := range observations {
-		observe(&obv, src, dest)
-	}
-}
-
 // connects to database instance
 func (d *DB) connect() {
 	// open database connection based on configuration
@@ -92,8 +55,112 @@ func createTable(db *sql.DB, name string) error {
 	return err
 }
 
+func getTables(db *sql.DB) ([]*SQLiteTable, error) {
+	rows, err := db.Query("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE type='table'")
+	if err != nil {
+		return nil, err
+	}
+
+	tables := []*SQLiteTable{}
+	for rows.Next() {
+		t := new(SQLiteTable)
+		err = rows.Scan(
+			&t.Type,
+			&t.Name,
+			&t.TableName,
+			&t.RootPage,
+			&t.SQL,
+		)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		tables = append(tables, t)
+	}
+
+	for _, t := range tables {
+		query := fmt.Sprintf("SELECT cid, name, type, dflt_value, pk FROM pragma_table_info('%s')", t.TableName)
+		rows, err := db.Query(query)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			column := new(SQLiteColumn)
+			err = rows.Scan(
+				&column.CID,
+				&column.Name,
+				&column.Type,
+				&column.DefaultValue,
+				&column.PrimaryKey,
+			)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			t.Columns = append(t.Columns, column)
+		}
+	}
+
+	return tables, nil
+}
+
+func replicate(tables []*SQLiteTable, src, dest *sql.DB) {
+	for _, t := range tables {
+		cells := make([]interface{}, len(t.Columns))
+		columns := make([]string, len(t.Columns))
+		for i, column := range t.Columns {
+			cells[i] = new(sql.RawBytes)
+			columns[i] = column.Name
+		}
+		query := fmt.Sprintf("SELECT * FROM %s", t.TableName)
+		rows, err := src.Query(query)
+		if err != nil {
+			panic(err)
+		}
+
+		for rows.Next() {
+			err = rows.Scan(cells...)
+			if err != nil {
+				panic(err)
+			}
+
+			row := []string{}
+			for _, cell := range cells {
+				cellStr := string(*cell.(*sql.RawBytes))
+				row = append(row, fmt.Sprintf(`"%s"`, cellStr))
+			}
+
+			statement := fmt.Sprintf("INSERT INTO %s VALUES (%s)", t.TableName, strings.Join(row, ","))
+			log.Println(statement)
+			_, err = dest.Exec(statement)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
+type SQLiteTable struct {
+	Type      string
+	Name      string
+	TableName string
+	RootPage  string
+	SQL       string
+	Columns   []*SQLiteColumn
+}
+
+type SQLiteColumn struct {
+	CID          int64
+	Name         string
+	Type         string
+	DefaultValue sql.NullString
+	PrimaryKey   int64
+}
+
 func main() {
 	// read configuration
+	log.Println("loading configuration")
 	configFile, err := os.Open("config.yaml")
 	if err != nil {
 		panic(err)
@@ -105,25 +172,26 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
 	log.Println("config loaded successfully")
 
-	c.Dest.connect()
-	defer c.Dest.Conn.Close()
-	log.Println("destination database connection established successfully")
-
+	log.Println("connecting to source...")
 	c.Src.connect()
 	defer c.Src.Conn.Close()
 	log.Println("source database connection established successfully")
 
-	// create tables for observations
-	for _, obv := range c.Observations {
-		createTable(c.Dest.Conn, obv.Dest)
+	log.Println("retrieving tables...")
+	tables, err := getTables(c.Src.Conn)
+	if err != nil {
+		panic(err)
 	}
+	log.Println("retrieved tables: ", tables)
 
-	log.Printf("Source: %+v\n", c.Src)
-	log.Printf("Destination: %+v\n", c.Dest)
-	log.Println("starting observation...")
-	// attempt to write observation data at the frequency specified
-	startObserving(c.Src.Conn, c.Dest.Conn, c.Observations)
+	log.Println("connecting to destination...")
+	c.Dest.connect()
+	defer c.Dest.Conn.Close()
+	log.Println("destination database connection established successfully")
+
+	log.Println("beginning replication...")
+	replicate(tables, c.Src.Conn, c.Dest.Conn)
+	log.Println("replication completed successfully")
 }
