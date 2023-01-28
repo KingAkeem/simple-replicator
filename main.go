@@ -1,9 +1,7 @@
 package main
 
 import (
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -97,7 +95,7 @@ func getTables(db *sql.DB) ([]*SQLiteTable, error) {
 	return tables, nil
 }
 
-func replicate(tables []*SQLiteTable, src, dest, session *DB) int {
+func replicate(tables []*SQLiteTable, src, dest *DB) int {
 	numInserts := 0
 	// each table should be able to be replicated in parallel
 	for _, t := range tables {
@@ -107,6 +105,7 @@ func replicate(tables []*SQLiteTable, src, dest, session *DB) int {
 			cells[i] = new(sql.RawBytes)
 			columns[i] = column.Name
 		}
+
 		createTable(dest.Conn, t.TableName, strings.Join(columns, ","))
 		query := fmt.Sprintf("SELECT * FROM %s", t.TableName)
 		rows, err := src.Conn.Query(query)
@@ -133,24 +132,52 @@ func replicate(tables []*SQLiteTable, src, dest, session *DB) int {
 			columnNames := strings.Join(columns, ",")
 			rowValues := strings.Join(row, ",")
 			statement := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", t.TableName, columnNames, rowValues)
-			// hash insert
-			statementHash, err := getHash(statement)
+
+			// create key value pairs for WHERE clauses
+			pairs := make([]string, 0)
+			for i, r := range row {
+				if strings.TrimSpace(r) != `""` {
+					pairs = append(pairs, fmt.Sprintf("%s = %s", columns[i], r))
+				}
+			}
+
+			// construct query
+			query = fmt.Sprintf(`SELECT * FROM %s where %s`, t.TableName, strings.Join(pairs, " and "))
+			existingRows, err := dest.Conn.Query(query)
 			if err != nil {
 				panic(err)
 			}
 
-			// this insert shouldn't be ran on src
-			session.Conn.Exec("INSERT INTO session VALUES($1, $2)", statementHash, src.Name)
+			// check if row exists
+			existingCells := make([]interface{}, len(t.Columns))
+			for i := range t.Columns {
+				existingCells[i] = new(sql.RawBytes)
+			}
+			row = []string{}
+			for existingRows.Next() {
+				err = existingRows.Scan(existingCells...)
+				if err != nil {
+					panic(err)
+				}
+				for _, cell := range existingCells {
+					if cell != nil {
+						cellStr := string(*cell.(*sql.RawBytes))
+						if strings.Contains(cellStr, `"`) {
+							row = append(row, fmt.Sprintf(`'%s'`, cellStr))
+						} else {
+							row = append(row, fmt.Sprintf(`"%s"`, cellStr))
+						}
+					}
+				}
 
-			// check session for operation, insert if it hasn't been done before
-			sessionRow := session.Conn.QueryRow("SELECT hash FROM session WHERE hash = $1 and origin = $2", statementHash, dest.Name)
-			var hash sql.NullString
-			sessionRow.Scan(&hash)
-			if hash.Valid { // this insertion has already been performed
-				log.Printf("SKIPPED INSERT [%s]\n", statement)
+				if existingCells[0] != nil {
+					break
+				}
+			}
+
+			// if elements exist, skip
+			if len(row) > 0 {
 				continue
-			} else {
-				session.Conn.Exec("INSERT INTO session VALUES($1, $2)", statementHash, dest.Name)
 			}
 
 			log.Println(statement)
@@ -161,6 +188,7 @@ func replicate(tables []*SQLiteTable, src, dest, session *DB) int {
 			}
 			numInserts++
 		}
+		rows.Close()
 	}
 	return numInserts
 }
@@ -182,16 +210,6 @@ type SQLiteColumn struct {
 	PrimaryKey   int64
 }
 
-func getHash(text string) (string, error) {
-	h := sha1.New()
-	_, err := h.Write([]byte(text))
-	if err != nil {
-		return "", err
-	}
-	sha1_hash := hex.EncodeToString(h.Sum(nil))
-	return sha1_hash, nil
-}
-
 func main() {
 	f, err := os.Open("config.yaml")
 	if err != nil {
@@ -209,13 +227,6 @@ func main() {
 		log.Printf("%s database connection established successfully\n", db.Name)
 	}
 
-	session := &DB{Name: "session"}
-	session.connect()
-	defer session.Conn.Close()
-	defer os.Remove("session") // removed after session is over
-
-	session.Conn.Exec("CREATE TABLE IF NOT EXISTS session(hash, origin)")
-
 	for _, src := range c.Databases {
 		log.Printf("retrieving tables for %s...", src.Name)
 		tables, err := getTables(src.Conn)
@@ -226,7 +237,7 @@ func main() {
 		for _, dest := range c.Databases {
 			if src.Name != dest.Name {
 				log.Printf("starting replication from %s to %s\n", src.Name, dest.Name)
-				numInserts := replicate(tables, src, dest, session)
+				numInserts := replicate(tables, src, dest)
 				log.Printf("number of inserts performed: %d\n", numInserts)
 			}
 		}
