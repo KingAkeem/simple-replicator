@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -14,28 +16,18 @@ import (
 // DB is the configuration for a database
 type DB struct {
 	Name   string  `yaml:"name"`
-	Driver string  `yaml:"driver"`
+	Driver string  `yaml:"driver,omitempty"`
 	Conn   *sql.DB `yaml:"-"`
 }
 
-// Observation are the observations that will be stored
-type Observation struct {
-	Src       string `yaml:"src"`
-	Dest      string `yaml:"dest"`
-	Frequency int    `yaml:"frequency"`
-}
-
-// Entire configuration
 type Config struct {
-	Src          DB            `yaml:"src"`
-	Dest         DB            `yaml:"dest"`
-	Observations []Observation `yaml:"observations"`
+	Databases []*DB `yaml:"databases"`
 }
 
 // connects to database instance
 func (d *DB) connect() {
 	// open database connection based on configuration
-	if d.Driver == "sqlite" {
+	if d.Driver == "sqlite" || strings.TrimSpace(d.Driver) == "" {
 		log.Println("setting up sqlite database connection")
 		db, err := sql.Open("sqlite3", d.Name)
 		if err != nil {
@@ -46,9 +38,9 @@ func (d *DB) connect() {
 }
 
 // creates output table for data placement
-func createTable(db *sql.DB, name string) error {
+func createTable(db *sql.DB, name, columns string) error {
 	// used for testing
-	_, err := db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(id, count, timestamp)`, name))
+	_, err := db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(%s)`, name, columns))
 	if err != nil {
 		panic(err)
 	}
@@ -105,7 +97,9 @@ func getTables(db *sql.DB) ([]*SQLiteTable, error) {
 	return tables, nil
 }
 
-func replicate(tables []*SQLiteTable, src, dest *sql.DB) {
+func replicate(tables []*SQLiteTable, src, dest, session *DB) int {
+	numInserts := 0
+	// each table should be able to be replicated in parallel
 	for _, t := range tables {
 		cells := make([]interface{}, len(t.Columns))
 		columns := make([]string, len(t.Columns))
@@ -113,32 +107,62 @@ func replicate(tables []*SQLiteTable, src, dest *sql.DB) {
 			cells[i] = new(sql.RawBytes)
 			columns[i] = column.Name
 		}
+		createTable(dest.Conn, t.TableName, strings.Join(columns, ","))
 		query := fmt.Sprintf("SELECT * FROM %s", t.TableName)
-		rows, err := src.Query(query)
+		rows, err := src.Conn.Query(query)
 		if err != nil {
 			panic(err)
 		}
-
 		for rows.Next() {
 			err = rows.Scan(cells...)
 			if err != nil {
 				panic(err)
 			}
 
+			// build row
 			row := []string{}
 			for _, cell := range cells {
 				cellStr := string(*cell.(*sql.RawBytes))
-				row = append(row, fmt.Sprintf(`"%s"`, cellStr))
+				if strings.Contains(cellStr, `"`) {
+					row = append(row, fmt.Sprintf(`'%s'`, cellStr))
+				} else {
+					row = append(row, fmt.Sprintf(`"%s"`, cellStr))
+				}
 			}
 
-			statement := fmt.Sprintf("INSERT INTO %s VALUES (%s)", t.TableName, strings.Join(row, ","))
-			log.Println(statement)
-			_, err = dest.Exec(statement)
+			columnNames := strings.Join(columns, ",")
+			rowValues := strings.Join(row, ",")
+			statement := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", t.TableName, columnNames, rowValues)
+			// hash insert
+			statementHash, err := getHash(statement)
 			if err != nil {
 				panic(err)
 			}
+
+			// this insert shouldn't be ran on src
+			session.Conn.Exec("INSERT INTO session VALUES($1, $2)", statementHash, src.Name)
+
+			// check session for operation, insert if it hasn't been done before
+			sessionRow := session.Conn.QueryRow("SELECT hash FROM session WHERE hash = $1 and origin = $2", statementHash, dest.Name)
+			var hash sql.NullString
+			sessionRow.Scan(&hash)
+			if hash.Valid { // this insertion has already been performed
+				log.Printf("SKIPPED INSERT [%s]\n", statement)
+				continue
+			} else {
+				session.Conn.Exec("INSERT INTO session VALUES($1, $2)", statementHash, dest.Name)
+			}
+
+			log.Println(statement)
+			// insert data
+			_, err = dest.Conn.Exec(statement)
+			if err != nil {
+				panic(err)
+			}
+			numInserts++
 		}
 	}
+	return numInserts
 }
 
 type SQLiteTable struct {
@@ -158,40 +182,53 @@ type SQLiteColumn struct {
 	PrimaryKey   int64
 }
 
+func getHash(text string) (string, error) {
+	h := sha1.New()
+	_, err := h.Write([]byte(text))
+	if err != nil {
+		return "", err
+	}
+	sha1_hash := hex.EncodeToString(h.Sum(nil))
+	return sha1_hash, nil
+}
+
 func main() {
-	// read configuration
-	log.Println("loading configuration")
-	configFile, err := os.Open("config.yaml")
+	f, err := os.Open("config.yaml")
 	if err != nil {
 		panic(err)
 	}
-	defer configFile.Close()
+	defer f.Close()
 
 	c := new(Config)
-	err = yaml.NewDecoder(configFile).Decode(c)
-	if err != nil {
-		panic(err)
+	yaml.NewDecoder(f).Decode(c)
+
+	for _, db := range c.Databases {
+		log.Printf("connecting to %s...\n", db.Name)
+		db.connect()
+		defer db.Conn.Close()
+		log.Printf("%s database connection established successfully\n", db.Name)
 	}
-	log.Println("config loaded successfully")
 
-	log.Println("connecting to source...")
-	c.Src.connect()
-	defer c.Src.Conn.Close()
-	log.Println("source database connection established successfully")
+	session := &DB{Name: "session"}
+	session.connect()
+	defer session.Conn.Close()
+	defer os.Remove("session") // removed after session is over
 
-	log.Println("retrieving tables...")
-	tables, err := getTables(c.Src.Conn)
-	if err != nil {
-		panic(err)
+	session.Conn.Exec("CREATE TABLE IF NOT EXISTS session(hash, origin)")
+
+	for _, src := range c.Databases {
+		log.Printf("retrieving tables for %s...", src.Name)
+		tables, err := getTables(src.Conn)
+		if err != nil {
+			panic(err)
+		}
+		log.Println("retrieved tables: ", tables)
+		for _, dest := range c.Databases {
+			if src.Name != dest.Name {
+				log.Printf("starting replication from %s to %s\n", src.Name, dest.Name)
+				numInserts := replicate(tables, src, dest, session)
+				log.Printf("number of inserts performed: %d\n", numInserts)
+			}
+		}
 	}
-	log.Println("retrieved tables: ", tables)
-
-	log.Println("connecting to destination...")
-	c.Dest.connect()
-	defer c.Dest.Conn.Close()
-	log.Println("destination database connection established successfully")
-
-	log.Println("beginning replication...")
-	replicate(tables, c.Src.Conn, c.Dest.Conn)
-	log.Println("replication completed successfully")
 }

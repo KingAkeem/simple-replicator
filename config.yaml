@@ -1,15 +1,4 @@
-src:
-  driver: sqlite
-  name: foo.db 
-
-dest:
-  driver: sqlite 
-  name: output.db
-
-tables:
-  - src: test 
-    dest: test_output 
-    frequency: 3  # in seconds
-  - src: user
-    dest: user_output
-    frequency: 2
+databases:
+  - name: northwind.db
+  - name: test.db
+  - name: another.db
