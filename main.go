@@ -27,9 +27,9 @@ func main() {
 	logger.Info("configuration file loaded successfully")
 
 	logger.Info("opening database connections...")
-	for _, db := range c.Databases {
-		db.Connect()
-		defer db.Conn.Close()
+	for _, database := range c.Databases {
+		database.Connect()
+		defer database.Conn.Close()
 	}
 	logger.Info("all databases connected...")
 
