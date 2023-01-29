@@ -6,6 +6,7 @@ import (
 	"os"
 	"simple-replicator/internal/logger"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
@@ -101,6 +102,20 @@ func getTables(db *sql.DB) ([]*SQLiteTable, error) {
 
 func replicate(tables []*SQLiteTable, src, dest *DB) int {
 	numInserts := 0
+
+	for _, t := range tables {
+		columns := make([]string, len(t.Columns))
+		for i, column := range t.Columns {
+			columns[i] = column.Name
+		}
+		createTable(dest.Conn, t.TableName, strings.Join(columns, ",")) // create tables for testing
+	}
+
+	insertTx, err := dest.Conn.Begin()
+	if err != nil {
+		panic(err)
+	}
+
 	// each table should be able to be replicated in parallel
 	for _, t := range tables {
 		cells := make([]interface{}, len(t.Columns))
@@ -109,8 +124,6 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 			cells[i] = new(sql.RawBytes)
 			columns[i] = column.Name
 		}
-
-		createTable(dest.Conn, t.TableName, strings.Join(columns, ",")) // create tables for testing
 
 		// pull source data
 		query := fmt.Sprintf("SELECT * FROM %s", t.TableName)
@@ -150,9 +163,9 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 					pairs = append(pairs, fmt.Sprintf("%s = %s", columns[i], r))
 				}
 			}
-
+			filter := strings.Join(pairs, " and ")
 			// construct query
-			query = fmt.Sprintf(`SELECT * FROM %s where %s`, t.TableName, strings.Join(pairs, " and "))
+			query = fmt.Sprintf(`SELECT * FROM %s where %s`, t.TableName, filter)
 			existingRows, err := dest.Conn.Query(query)
 			if err != nil {
 				panic(err)
@@ -194,7 +207,7 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 
 			logger.Debug("Inserting", "statement", statement)
 			// insert data
-			_, err = dest.Conn.Exec(statement)
+			_, err = insertTx.Exec(statement)
 			if err != nil {
 				panic(err)
 			}
@@ -203,6 +216,11 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 			logger.Debug("rows successfully inserted", "number inserted", numInserts)
 		}
 		rows.Close()
+	}
+
+	err = insertTx.Commit()
+	if err != nil {
+		panic(err)
 	}
 	return numInserts
 }
@@ -250,9 +268,18 @@ func main() {
 			logger.Error("unable to get tables", "error", err)
 			panic(err)
 		}
+
 		for _, dest := range c.Databases {
 			if src.Name != dest.Name {
-				replicate(tables, src, dest)
+				start := time.Now()
+				numInserts := replicate(tables, src, dest)
+				logger.Info("replication completed successfully",
+					"source", src.Name,
+					"destination", dest.Name,
+					"number of tables", len(tables),
+					"number of inserts", numInserts,
+					"time to complete", fmt.Sprintf("%v", time.Since(start)),
+				)
 			}
 		}
 	}
