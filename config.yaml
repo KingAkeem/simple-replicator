@@ -2,3 +2,4 @@ databases:
   - name: northwind.db
   - name: test.db
   - name: another.db
+  - name: northwind2.db
