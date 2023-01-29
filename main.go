@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
+	"simple-replicator/internal/logger"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -26,13 +26,15 @@ type Config struct {
 func (d *DB) connect() {
 	// open database connection based on configuration
 	if d.Driver == "sqlite" || strings.TrimSpace(d.Driver) == "" {
-		log.Println("setting up sqlite database connection")
+		logger.Debug("setting up sqlite database connection", "name", d.Name)
 		db, err := sql.Open("sqlite3", d.Name)
 		if err != nil {
+			logger.Error("unable to open sqlite database", "error", err)
 			panic(err)
 		}
 		d.Conn = db
 	}
+	logger.Debug("successfully connected", "name", d.Name)
 }
 
 // creates output table for data placement
@@ -46,6 +48,7 @@ func createTable(db *sql.DB, name, columns string) error {
 }
 
 func getTables(db *sql.DB) ([]*SQLiteTable, error) {
+	logger.Debug("getting tables")
 	rows, err := db.Query("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE type='table'")
 	if err != nil {
 		return nil, err
@@ -62,7 +65,7 @@ func getTables(db *sql.DB) ([]*SQLiteTable, error) {
 			&t.SQL,
 		)
 		if err != nil {
-			log.Println(err)
+			logger.Error("unable to scan row", "error", err)
 			continue
 		}
 		tables = append(tables, t)
@@ -85,13 +88,14 @@ func getTables(db *sql.DB) ([]*SQLiteTable, error) {
 				&column.PrimaryKey,
 			)
 			if err != nil {
-				log.Println(err)
+				logger.Error("unable to scan row", "error", err)
 				continue
 			}
 			t.Columns = append(t.Columns, column)
 		}
 	}
 
+	logger.Debug("tables retrieved", "tables", tables)
 	return tables, nil
 }
 
@@ -106,15 +110,21 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 			columns[i] = column.Name
 		}
 
-		createTable(dest.Conn, t.TableName, strings.Join(columns, ","))
+		createTable(dest.Conn, t.TableName, strings.Join(columns, ",")) // create tables for testing
+
+		// pull source data
 		query := fmt.Sprintf("SELECT * FROM %s", t.TableName)
 		rows, err := src.Conn.Query(query)
 		if err != nil {
+			logger.Error("unable to perform query", "error", err)
 			panic(err)
 		}
+
+		// read source data
 		for rows.Next() {
 			err = rows.Scan(cells...)
 			if err != nil {
+				logger.Error("unable to scan row", "error", err)
 				panic(err)
 			}
 
@@ -157,6 +167,7 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 			for existingRows.Next() {
 				err = existingRows.Scan(existingCells...)
 				if err != nil {
+					logger.Error("unable to scan row", "error", err)
 					panic(err)
 				}
 				for _, cell := range existingCells {
@@ -177,16 +188,19 @@ func replicate(tables []*SQLiteTable, src, dest *DB) int {
 
 			// if elements exist, skip
 			if len(row) > 0 {
+				logger.Debug("skipping insert", "statement", statement)
 				continue
 			}
 
-			log.Println(statement)
+			logger.Debug("Inserting", "statement", statement)
 			// insert data
 			_, err = dest.Conn.Exec(statement)
 			if err != nil {
 				panic(err)
 			}
+
 			numInserts++
+			logger.Debug("rows successfully inserted", "number inserted", numInserts)
 		}
 		rows.Close()
 	}
@@ -211,6 +225,7 @@ type SQLiteColumn struct {
 }
 
 func main() {
+	logger.Info("reading configuration file...")
 	f, err := os.Open("config.yaml")
 	if err != nil {
 		panic(err)
@@ -219,27 +234,27 @@ func main() {
 
 	c := new(Config)
 	yaml.NewDecoder(f).Decode(c)
+	logger.Info("configuration file loaded successfully")
 
+	logger.Info("opening database connections...")
 	for _, db := range c.Databases {
-		log.Printf("connecting to %s...\n", db.Name)
 		db.connect()
 		defer db.Conn.Close()
-		log.Printf("%s database connection established successfully\n", db.Name)
 	}
+	logger.Info("all databases connected...")
 
+	logger.Info("starting replication of databases...")
 	for _, src := range c.Databases {
-		log.Printf("retrieving tables for %s...", src.Name)
 		tables, err := getTables(src.Conn)
 		if err != nil {
+			logger.Error("unable to get tables", "error", err)
 			panic(err)
 		}
-		log.Println("retrieved tables: ", tables)
 		for _, dest := range c.Databases {
 			if src.Name != dest.Name {
-				log.Printf("starting replication from %s to %s\n", src.Name, dest.Name)
-				numInserts := replicate(tables, src, dest)
-				log.Printf("number of inserts performed: %d\n", numInserts)
+				replicate(tables, src, dest)
 			}
 		}
 	}
+	logger.Info("databases successfully replicated...")
 }
