@@ -80,6 +80,7 @@ func GetSQLiteTables(db *sql.DB) ([]*Table, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	tables := []*Table{}
 	for rows.Next() {
@@ -104,6 +105,7 @@ func GetSQLiteTables(db *sql.DB) ([]*Table, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer rows.Close()
 
 		columns := t.GetColumns()
 		for rows.Next() {

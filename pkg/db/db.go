@@ -86,6 +86,7 @@ func Replicate(schema Schema, src, dest *DB) int {
 			logger.Error("unable to perform query", "error", err)
 			panic(err)
 		}
+		defer rows.Close()
 
 		// read source data
 		for rows.Next() {
@@ -124,6 +125,7 @@ func Replicate(schema Schema, src, dest *DB) int {
 			if err != nil {
 				panic(err)
 			}
+			defer existingRows.Close()
 
 			// check if row exists
 			existingCells := make([]interface{}, len(columns))
@@ -169,7 +171,6 @@ func Replicate(schema Schema, src, dest *DB) int {
 			numInserts++
 			logger.Debug("rows successfully inserted", "number inserted", numInserts)
 		}
-		rows.Close()
 	}
 
 	err = insertTx.Commit()

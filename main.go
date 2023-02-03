@@ -55,6 +55,8 @@ func main() {
 				if c.Driver == "sqlite3" {
 					schema = db.SQLiteSchema{Tables: tables}
 				}
+				logger.Info("source", "name", src.Name, "stats", src.Conn.Stats())
+				logger.Info("dest", "name", dest.Name, "stats", dest.Conn.Stats())
 				numInserts := db.Replicate(schema, src, dest)
 				logger.Info("replication completed successfully",
 					"source", src.Name,
