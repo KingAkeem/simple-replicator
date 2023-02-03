@@ -12,6 +12,7 @@ The replicator uses a YAML configuration file to perform replication.
 The configuration file should contain the necessary configuration for connecting to the database, depending on the driver.
 e.g. sqlite3 only requires a file name while Postgresql requires multiple values
 ```YAML
+loglevel: DEBUG
 driver: sqlite3
 databases:
   - name: mydb
