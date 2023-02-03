@@ -1,6 +1,9 @@
 package logger
 
 import (
+	"simple-replicator/internal/config"
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -8,9 +11,10 @@ import (
 var zapper *zap.Logger
 
 func init() {
-
 	logCfg := zap.NewProductionConfig()
-	//logCfg.Level.SetLevel(zap.DebugLevel)
+	if strings.ToLower(config.GetLevel()) == "debug" {
+		logCfg.Level.SetLevel(zap.DebugLevel)
+	}
 	logCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	zapper = zap.Must(logCfg.Build())
 }

@@ -1,3 +1,4 @@
+loglevel: INFO
 driver: sqlite3
 databases:
   - name: northwind.db
