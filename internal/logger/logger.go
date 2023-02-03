@@ -10,7 +10,7 @@ var zapper *zap.Logger
 func init() {
 
 	logCfg := zap.NewProductionConfig()
-	logCfg.Level.SetLevel(zap.DebugLevel)
+	//logCfg.Level.SetLevel(zap.DebugLevel)
 	logCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	zapper = zap.Must(logCfg.Build())
 }

@@ -64,7 +64,7 @@ type SQLiteColumn struct {
 	PrimaryKey   int64
 }
 
-func connect(name string) (*sql.DB, error) {
+func connectSQLite(name string) (*sql.DB, error) {
 	logger.Debug("setting up sqlite database connection", "name", name)
 	db, err := sql.Open("sqlite3", name)
 	if err != nil {

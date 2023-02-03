@@ -1,3 +1,4 @@
+driver: sqlite3
 databases:
   - name: northwind.db
   - name: test.db

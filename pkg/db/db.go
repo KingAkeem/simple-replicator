@@ -9,9 +9,8 @@ import (
 
 // DB is the configuration for a database
 type DB struct {
-	Name   string  `yaml:"name"`
-	Driver string  `yaml:"driver,omitempty"`
-	Conn   *sql.DB `yaml:"-"`
+	Name string  `yaml:"name"`
+	Conn *sql.DB `yaml:"-"`
 }
 
 type Schema interface {
@@ -38,10 +37,10 @@ type Table struct {
 }
 
 // connects to database instance
-func (d *DB) Connect() {
+func (d *DB) Connect(driver string) {
 	// open database connection based on configuration
-	if d.Driver == "sqlite" || strings.TrimSpace(d.Driver) == "" {
-		db, err := connect(d.Name)
+	if driver == "sqlite3" {
+		db, err := connectSQLite(d.Name)
 		if err != nil {
 			panic(err)
 		}
