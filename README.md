@@ -14,8 +14,8 @@ e.g. sqlite3 only requires a file name while Postgresql requires multiple values
 ```YAML
 driver: sqlite3
 databases:
-	- name: mydb
-	- name: test
+  - name: mydb
+  - name: test
 ```
 The expected file name is `config.yaml`.
 Once this file has been configured as desired, run `go run main.go` to begin replication.
