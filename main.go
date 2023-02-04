@@ -21,11 +21,6 @@ func main() {
 
 	logger.Info("starting replication of databases...")
 	for _, src := range databases {
-		tables, err := src.GetTables()
-		if err != nil {
-			logger.Fatal("unable to get tables", "error", err)
-		}
-
 		for _, dest := range databases {
 			if src.Name != dest.Name {
 				start := time.Now()
@@ -39,7 +34,7 @@ func main() {
 				logger.Info("replication completed successfully",
 					"source", src.Name,
 					"destination", dest.Name,
-					"number of tables", len(tables),
+					"number of tables", len(src.Tables),
 					"number of inserts", numInserts,
 					"time to complete", fmt.Sprintf("%v", time.Since(start)),
 				)
