@@ -17,6 +17,9 @@ driver: sqlite3
 databases:
   - name: mydb
   - name: test
+  - name: example
 ```
-The expected file name is `config.yaml`.
+The expected file name is `config.yaml`, the replicator expects the databases to already exist based on the configuration.
+(SQLite will automatically create database files for non-existing databases, but at least one needs to exist).
+Currently, there is trouble with replicating multiple databases at once, so it's recommended to replicate a single database at a time.
 Once this file has been configured as desired, run `go run main.go` to begin replication.
