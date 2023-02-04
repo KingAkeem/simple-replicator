@@ -21,24 +21,17 @@ func main() {
 
 	logger.Info("starting replication of databases...")
 	for _, src := range databases {
-		var tables []*db.Table
-		var err error
-		if config.GetDriver() == "sqlite3" {
-			tables, err = db.GetSQLiteTables(src.Conn)
-			if err != nil {
-				logger.Error("unable to get tables", "error", err)
-				panic(err)
-			}
-		} else {
-			panic("unsupported database")
+		tables, err := src.GetTables()
+		if err != nil {
+			logger.Fatal("unable to get tables", "error", err)
 		}
 
 		for _, dest := range databases {
 			if src.Name != dest.Name {
 				start := time.Now()
-				var schema db.Schema
-				if config.GetDriver() == "sqlite3" {
-					schema = db.SQLiteSchema{Tables: tables}
+				schema, err := src.GetSchema()
+				if err != nil {
+					panic(err)
 				}
 				logger.Debug("source", "name", src.Name, "stats", src.Conn.Stats())
 				logger.Debug("dest", "name", dest.Name, "stats", dest.Conn.Stats())

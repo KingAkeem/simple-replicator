@@ -3,14 +3,16 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"simple-replicator/internal/config"
 	"simple-replicator/internal/logger"
 	"strings"
 )
 
 // DB is the configuration for a database
 type DB struct {
-	Name string  `yaml:"name"`
-	Conn *sql.DB `yaml:"-"`
+	Name   string   `yaml:"name"`
+	Tables []*Table `yaml:"-"`
+	Conn   *sql.DB  `yaml:"-"`
 }
 
 type Schema interface {
@@ -47,6 +49,35 @@ func (d *DB) Connect(driver string) {
 		d.Conn = db
 	}
 	logger.Debug("successfully connected", "name", d.Name)
+}
+
+func (d *DB) GetTables() ([]*Table, error) {
+	if d.Tables != nil && len(d.Tables) > 0 {
+		return d.Tables, nil
+	}
+
+	if config.GetDriver() == "sqlite3" {
+		tables, err := getSQLiteTables(d.Conn)
+		if err != nil {
+			return nil, err
+		}
+		d.Tables = tables
+	} else {
+		return nil, fmt.Errorf("unsupported driver: %v", config.GetDriver())
+	}
+
+	return d.Tables, nil
+}
+
+func (d *DB) GetSchema() (Schema, error) {
+	if config.GetDriver() == "sqlite3" {
+		tables, err := d.GetTables()
+		if err != nil {
+			return nil, err
+		}
+		return SQLiteSchema{Tables: tables}, nil
+	}
+	return nil, fmt.Errorf("unsupported driver: %v", config.GetDriver())
 }
 
 // creates output table for data placement

@@ -74,7 +74,7 @@ func connectSQLite(name string) (*sql.DB, error) {
 	return db, nil
 }
 
-func GetSQLiteTables(db *sql.DB) ([]*Table, error) {
+func getSQLiteTables(db *sql.DB) ([]*Table, error) {
 	logger.Debug("getting tables")
 	rows, err := db.Query("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE type='table'")
 	if err != nil {

@@ -36,5 +36,5 @@ func Error(msg string, keysAndValues ...interface{}) {
 }
 
 func Fatal(msg string, keysAndValues ...interface{}) {
-	zapper.Sugar().Fatalw(msg)
+	zapper.Sugar().Fatalw(msg, keysAndValues...)
 }
